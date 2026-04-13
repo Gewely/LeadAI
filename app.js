@@ -30,6 +30,7 @@ const seed = {
       status: 'qualified',
       score: 80,
       assigned_to: 'u2',
+      engagement: 'high',
       created_date: new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString()
     },
     {
@@ -43,11 +44,19 @@ const seed = {
       status: 'new',
       score: 70,
       assigned_to: 'u3',
+      engagement: 'medium',
       created_date: new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString()
     }
   ],
   sales: [],
-  activities: []
+  activities: [],
+  creatives: [],
+  scoringRules: {
+    source: { Meta: 15, WhatsApp: 20, Website: 10, Google: 12 },
+    engagement: { high: 25, medium: 15, low: 5 },
+    responseTime: { rapid: 20, moderate: 10, slow: 0 },
+    status: { new: 10, contacted: 15, qualified: 30 }
+  }
 };
 
 const state = {
@@ -99,12 +108,22 @@ function visibleLeads() {
   return state.db.leads.filter((lead) => lead.assigned_to === state.session.id);
 }
 
-function computeLeadScore(input) {
-  let score = 50;
-  if ((input.source || '').toLowerCase() === 'meta') score += 10;
-  if ((input.phone || '').trim()) score += 10;
-  if ((input.interest || '').trim()) score += 10;
-  return score;
+function computeLeadScore(lead) {
+  const rules = state.db.scoringRules;
+  let score = 0;
+
+  score += rules.source[lead.source] || 0;
+  score += rules.engagement[lead.engagement] || 0;
+  score += rules.status[lead.status] || 0;
+
+  if ((lead.phone || '').trim()) score += 5;
+  if ((lead.interest || '').trim()) score += 5;
+
+  const daysSinceCreated = (Date.now() - new Date(lead.created_date).getTime()) / (1000 * 60 * 60 * 24);
+  if (daysSinceCreated <= 1) score += 10;
+  else if (daysSinceCreated <= 3) score += 5;
+
+  return Math.min(100, Math.max(0, score));
 }
 
 function leadInsights(lead) {
@@ -144,11 +163,51 @@ function dashboardMetrics() {
   return { totalLeads, qualifiedLeads, wonSales, conversionRate, revenue };
 }
 
+function generateAICreative(campaign, style) {
+  const templates = {
+    minimalist: ['Clean layouts focused on your key message', 'High contrast for mobile viewing', 'Whitespace dominates the design'],
+    bold: ['Eye-catching colors and typography', 'Large headlines with impact', 'Call-to-action buttons prominent'],
+    storytelling: ['Visual narrative flow', 'Before/after components', 'Emotional connection through imagery']
+  };
+
+  const platforms = {
+    Meta: 'Instagram, Facebook, Reels (1080x1080px or 9:16)',
+    Google: 'Search, Display (728x90px, 300x250px, 300x600px)',
+    TikTok: 'Short-form video (9:16, 15-60 sec)',
+    LinkedIn: 'Professional B2B visuals (1200x628px)'
+  };
+
+  const suggestions = templates[style] || templates.minimalist;
+  const platform = platforms[campaign.platform] || 'Multi-platform';
+
+  return {
+    id: uid('cr'),
+    campaign_id: campaign.id,
+    style: style,
+    platform: platform,
+    suggestions: suggestions,
+    design_tips: [
+      '✓ Include brand colors for consistency',
+      '✓ Add persuasive copy above the fold',
+      '✓ Test variations (A/B) for better CTR',
+      '✓ Mobile-first approach always'
+    ],
+    created_date: new Date().toISOString()
+  };
+}
+
+function addCreativeDesign(campaign, style) {
+  const creative = generateAICreative(campaign, style);
+  state.db.creatives.push(creative);
+  saveDb();
+}
+
 function layout(title, body) {
   const links = [
     ['#/dashboard', 'Dashboard'],
     ['#/leads', 'Leads'],
     ['#/campaigns', 'Campaigns'],
+    ['#/creatives', 'AI Creatives'],
     ['#/sales', 'Sales']
   ];
   return `<div class="layout">
@@ -189,17 +248,38 @@ function loginPage() {
 
 function dashboardPage() {
   const m = dashboardMetrics();
-  const rows = visibleLeads().slice(0, 5).map((lead) => `<tr>
+  const leads = visibleLeads();
+
+  const avgScore = leads.length > 0 ? (leads.reduce((sum, l) => sum + l.score, 0) / leads.length).toFixed(1) : 0;
+  const highScoreLeads = leads.filter(l => l.score >= 80).length;
+  const lowScoreLeads = leads.filter(l => l.score < 40).length;
+
+  const rows = leads.slice(0, 5).map((lead) => `<tr>
     <td>${lead.name}</td><td>${lead.status}</td><td>${lead.source}</td><td>${leadInsights(lead)}</td>
   </tr>`).join('');
+
   app.innerHTML = layout('Dashboard', `<section class="metric-grid">
     <article class="metric-card"><div class="label">Total Leads</div><div class="value">${m.totalLeads}</div></article>
     <article class="metric-card"><div class="label">Qualified Leads</div><div class="value">${m.qualifiedLeads}</div></article>
     <article class="metric-card"><div class="label">Won Sales</div><div class="value">${m.wonSales}</div></article>
     <article class="metric-card"><div class="label">Conversion Rate</div><div class="value">${m.conversionRate.toFixed(1)}%</div></article>
+    <article class="metric-card"><div class="label">Avg Lead Score</div><div class="value">${avgScore}</div></article>
     <article class="metric-card"><div class="label">Total Revenue</div><div class="value">${fmtCurrency(m.revenue)}</div></article>
   </section><br/>
-  <section class="card table-wrap"><h3>Insights</h3><table class="table"><thead><tr><th>Lead</th><th>Status</th><th>Source</th><th>Insight</th></tr></thead><tbody>${rows}</tbody></table></section>`);
+  <section class="grid-2">
+    <div class="card"><h3>Lead Quality</h3>
+      <p><span style="font-weight:600; color: var(--success);">High Quality (80+):</span> ${highScoreLeads} leads</p>
+      <p><span style="font-weight:600; color: var(--warning);">Average (40-79):</span> ${leads.length - highScoreLeads - lowScoreLeads} leads</p>
+      <p><span style="font-weight:600; color: var(--danger);">Low Quality (<40):</span> ${lowScoreLeads} leads</p>
+    </div>
+    <div class="card"><h3>Scoring Factors</h3>
+      <p>✓ Lead Source (Meta +15, WhatsApp +20)</p>
+      <p>✓ Engagement Level (High +25, Medium +15)</p>
+      <p>✓ Lead Status (Qualified +30)</p>
+      <p>✓ Recency Bonus (New +10)</p>
+    </div>
+  </section><br/>
+  <section class="card table-wrap"><h3>Recent Leads & Insights</h3><table class="table"><thead><tr><th>Lead</th><th>Status</th><th>Source</th><th>Insight</th></tr></thead><tbody>${rows}</tbody></table></section>`);
 }
 
 function leadFormHtml() {
@@ -208,10 +288,11 @@ function leadFormHtml() {
   return `<section class="card"><h3>Create Lead</h3><form id="lead-form" class="form-grid">
       <div><label>Name</label><input name="name" required></div>
       <div><label>Phone</label><input name="phone"></div>
-      <div><label>Source</label><select name="source"><option>Meta</option><option>Website</option><option>WhatsApp</option></select></div>
+      <div><label>Source</label><select name="source"><option>Meta</option><option>Website</option><option>WhatsApp</option><option>Google</option></select></div>
       <div><label>Campaign</label><select name="campaign">${campaignOptions}</select></div>
       <div><label>Ad Name</label><input name="ad_name"></div>
       <div><label>Interest</label><input name="interest"></div>
+      <div><label>Engagement Level</label><select name="engagement"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></div>
       <div><label>Assign To</label><select name="assigned_to">${agentOptions}</select></div>
       <div style="align-self:end"><button class="btn primary" type="submit">Create Lead</button></div>
     </form></section>`;
@@ -262,11 +343,12 @@ function leadsPage() {
         campaign: data.campaign,
         ad_name: data.ad_name,
         interest: data.interest,
+        engagement: data.engagement || 'medium',
         status: 'new',
-        score: computeLeadScore(data),
         assigned_to: data.assigned_to,
         created_date: new Date().toISOString()
       };
+      lead.score = computeLeadScore(lead);
       state.db.leads.push(lead);
       saveDb();
       render();
@@ -422,6 +504,49 @@ function salesPage() {
   });
 }
 
+function creativesPage() {
+  app.innerHTML = layout('AI Media Creative Designer', `${isAdmin() ? `<section class="card">
+      <h3>Generate Creative Design</h3>
+      <form id="creative-form" class="form-grid">
+        <div><label>Campaign</label><select name="campaign" id="creative-campaign">${state.db.campaigns.map((c) => `<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
+        <div><label>Design Style</label><select name="style"><option value="minimalist">Minimalist</option><option value="bold">Bold & Vibrant</option><option value="storytelling">Storytelling</option></select></div>
+        <div style="align-self:end"><button class="btn primary" type="submit">Generate Design Brief</button></div>
+      </form>
+    </section><br/>` : ''}
+    <section class="card"><h3>Generated Designs</h3><div id="creatives-list"></div></section>`);
+
+  const creativesList = document.getElementById('creatives-list');
+  if (state.db.creatives.length === 0) {
+    creativesList.innerHTML = '<p class="meta">No designs yet. Create your first design to get started.</p>';
+  } else {
+    creativesList.innerHTML = state.db.creatives.map((c) => `<div class="creative-card" style="border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 0.8rem; background: var(--surface-alt);">
+      <h4>${getCampaign(c.campaign_id)?.name || 'Unknown Campaign'}</h4>
+      <p class="meta"><strong>Style:</strong> ${c.style.charAt(0).toUpperCase() + c.style.slice(1)}</p>
+      <p class="meta"><strong>Platform Format:</strong> ${c.platform}</p>
+      <div style="margin-top: 0.6rem; margin-bottom: 0.6rem;"><strong>Design Suggestions:</strong>
+        <ul style="list-style: inside; margin: 0.4rem 0; padding: 0;">${c.suggestions.map((s) => `<li>${s}</li>`).join('')}</ul>
+      </div>
+      <div><strong>Implementation Tips:</strong>
+        <ul style="list-style: inside; margin: 0.4rem 0; padding: 0;">${c.design_tips.map((t) => `<li>${t}</li>`).join('')}</ul>
+      </div>
+      <p class="meta">Created: ${fmtDate(c.created_date)}</p>
+    </div>`).join('');
+  }
+
+  const form = document.getElementById('creative-form');
+  if (form) {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(e.target).entries());
+      const campaign = getCampaign(data.campaign);
+      if (campaign) {
+        addCreativeDesign(campaign, data.style);
+        render();
+      }
+    });
+  }
+}
+
 function bindShared() {
   const logout = document.getElementById('logout-btn');
   if (logout) logout.addEventListener('click', () => {
@@ -455,6 +580,7 @@ function render() {
   else if (state.route === '#/leads') leadsPage();
   else if (state.route.startsWith('#/leads/')) leadDetailPage(state.route.replace('#/leads/', ''));
   else if (state.route === '#/campaigns') campaignsPage();
+  else if (state.route === '#/creatives') creativesPage();
   else if (state.route === '#/sales') salesPage();
   else dashboardPage();
 
