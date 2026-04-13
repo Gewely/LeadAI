@@ -2,6 +2,8 @@
 
 LeadFlow AI is a full SaaS-style lead-to-sale tracking web application with authentication, role-based access, campaign management, lead workflows, sales tracking, and dashboard analytics.
 
+> Merge resolution note: this project uses the Express + SQLite API architecture (not the legacy localStorage-only variant).
+
 ## Features
 - Email/password authentication
 - Role-based access:
